@@ -2,15 +2,15 @@ import os
 import re
 import json
 from datetime import date
-from telethon import TelegramClient, events, Button
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 # ─── Настройки ───────────────────────────────────────────────────────────────
-API_ID      = int(os.environ["API_ID"])
-API_HASH    = os.environ["API_HASH"]
-PHONE       = os.environ.get("PHONE", "")
-SOURCE_BOT  = os.environ["SOURCE_BOT"]       # username бота банка (без @)
-SESSION     = os.environ.get("SESSION_STRING", "")
+API_ID     = int(os.environ["API_ID"])
+API_HASH   = os.environ["API_HASH"]
+PHONE      = os.environ.get("PHONE", "")
+SOURCE_BOT = os.environ["SOURCE_BOT"]
+SESSION    = os.environ.get("SESSION_STRING", "")
 
 # ─── Хранилище ────────────────────────────────────────────────────────────────
 DATA_FILE = "payments.json"
@@ -48,47 +48,39 @@ def fmt_today():
     day = date.today().strftime("%d.%m.%y")
     records = db.get(day, [])
     if not records:
-        return f"📅 **{day}**\n\nПлатежей пока нет."
+        return f"📅 {day}\n\nПлатежей пока нет."
     total = sum(r["summa"] for r in records)
-    lines = [f"📅 **{day}**", f"💰 Итого: **{total:.2f} TJS**", f"📝 Транзакций: {len(records)}", "─" * 24]
+    lines = [
+        f"📅 {day}",
+        f"💰 Итого: {total:.2f} TJS",
+        f"📝 Транзакций: {len(records)}",
+        "─" * 22,
+    ]
     for i, r in enumerate(records, 1):
-        lines.append(f"{i}. `{r['time']}`  +**{r['summa']:.2f}** TJS\n    👤 {r['otpravitel']}")
+        lines.append(f"{i}. {r['time']}  +{r['summa']:.2f} TJS  👤 {r['otpravitel']}")
     return "\n".join(lines)
 
 def fmt_history():
     if not db:
-        return "📊 **История**\n\nДанных пока нет."
-    lines = ["📊 **История по дням**", ""]
+        return "📊 История\n\nДанных пока нет."
+    lines = ["📊 История по дням", ""]
     grand = 0
     days = sorted(db.keys(), key=lambda x: (x[6:], x[3:5], x[:2]))
     for day in days:
         records = db[day]
         total = sum(r["summa"] for r in records)
         grand += total
-        bar_count = min(10, round(total / 50))
-        bar = "█" * bar_count + "░" * (10 - bar_count)
-        lines.append(f"📅 `{day}`  {bar}  **{total:.2f}** TJS  ({len(records)} шт)")
-    lines += ["", "━" * 24, f"💎 **Всего: {grand:.2f} TJS**"]
+        lines.append(f"📅 {day}  —  {total:.2f} TJS  ({len(records)} шт)")
+    lines += ["", "─" * 22, f"💎 Всего: {grand:.2f} TJS"]
     return "\n".join(lines)
 
-# ─── Меню ────────────────────────────────────────────────────────────────────
-MENU_BUTTONS = [
-    [Button.inline("📅 Сегодня", b"today"), Button.inline("📊 История", b"history")],
-    [Button.inline("🔄 Обновить", b"menu")],
-]
-
-def menu_text():
-    day = date.today().strftime("%d.%m.%y")
-    records = db.get(day, [])
-    total_today = sum(r["summa"] for r in records)
-    grand = sum(sum(r["summa"] for r in v) for v in db.values())
+def fmt_help():
     return (
-        f"💳 **Payment Tracker**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📅 Сегодня ({day}): **{total_today:.2f} TJS**\n"
-        f"💰 За всё время: **{grand:.2f} TJS**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Выбери раздел 👇"
+        "📋 Команды:\n\n"
+        "/today — платежи за сегодня\n"
+        "/all — история по всем дням\n"
+        "/day DD.MM.YY — конкретный день\n"
+        "/help — это сообщение"
     )
 
 # ─── Клиент ──────────────────────────────────────────────────────────────────
@@ -97,7 +89,7 @@ if SESSION:
 else:
     client = TelegramClient("session", API_ID, API_HASH)
 
-# ─── Новое зачисление от бота банка ──────────────────────────────────────────
+# ─── Слушаем банковский бот ───────────────────────────────────────────────────
 @client.on(events.NewMessage(from_users=SOURCE_BOT))
 async def on_payment(event):
     text = event.raw_text
@@ -123,44 +115,54 @@ async def on_payment(event):
 
     await client.send_message(
         "me",
-        f"✅ Новое зачисление!\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💵 +**{payment['summa']:.2f} TJS**  🕐 {payment['time']}\n"
+        f"✅ +{payment['summa']:.2f} TJS  [{payment['time']}]\n"
         f"👤 {payment['otpravitel']}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📅 За {day}: **{day_total:.2f} TJS** ({count} платежей)",
-        buttons=MENU_BUTTONS,
-        parse_mode="markdown"
+        f"📅 За {day}: {day_total:.2f} TJS ({count} платежей)\n\n"
+        f"Команды: /today  /all  /help"
     )
 
-# ─── /menu ────────────────────────────────────────────────────────────────────
-@client.on(events.NewMessage(outgoing=True, pattern=r"^/menu$"))
-async def cmd_menu(event):
+# ─── Команды в Избранном ──────────────────────────────────────────────────────
+async def is_saved_messages(event):
     me = await client.get_me()
     chat = await event.get_chat()
-    if chat.id != me.id:
+    return chat.id == me.id
+
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/today$"))
+async def cmd_today(event):
+    if not await is_saved_messages(event):
         return
-    await event.delete()
-    await client.send_message("me", menu_text(), buttons=MENU_BUTTONS, parse_mode="markdown")
+    await event.respond(fmt_today())
 
-# ─── Кнопки ──────────────────────────────────────────────────────────────────
-@client.on(events.CallbackQuery(data=b"today"))
-async def cb_today(event):
-    await event.answer()
-    await event.edit(fmt_today(), buttons=[[Button.inline("🔙 Назад", b"menu")]], parse_mode="markdown")
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/all$"))
+async def cmd_all(event):
+    if not await is_saved_messages(event):
+        return
+    await event.respond(fmt_history())
 
-@client.on(events.CallbackQuery(data=b"history"))
-async def cb_history(event):
-    await event.answer()
-    await event.edit(fmt_history(), buttons=[[Button.inline("🔙 Назад", b"menu")]], parse_mode="markdown")
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/day (.+)$"))
+async def cmd_day(event):
+    if not await is_saved_messages(event):
+        return
+    day = event.pattern_match.group(1).strip()
+    records = db.get(day, [])
+    if not records:
+        await event.respond(f"📅 {day}\n\nПлатежей нет.")
+        return
+    total = sum(r["summa"] for r in records)
+    lines = [f"📅 {day}", f"💰 Итого: {total:.2f} TJS", "─" * 22]
+    for i, r in enumerate(records, 1):
+        lines.append(f"{i}. {r['time']}  +{r['summa']:.2f} TJS  👤 {r['otpravitel']}")
+    await event.respond("\n".join(lines))
 
-@client.on(events.CallbackQuery(data=b"menu"))
-async def cb_menu(event):
-    await event.answer()
-    await event.edit(menu_text(), buttons=MENU_BUTTONS, parse_mode="markdown")
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/help$"))
+async def cmd_help(event):
+    if not await is_saved_messages(event):
+        return
+    await event.respond(fmt_help())
 
 # ─── Запуск ───────────────────────────────────────────────────────────────────
-print("✅ Бот запущен. Напиши /menu в Избранное для управления.")
+print("✅ Бот запущен!")
+print("Команды в Избранном: /today  /all  /day DD.MM.YY  /help")
 
 with client.start(phone=lambda: PHONE):
     client.run_until_disconnected()
