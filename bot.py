@@ -12,8 +12,8 @@ PHONE      = os.environ.get("PHONE", "")
 SOURCE_BOT = os.environ["SOURCE_BOT"]
 SESSION    = os.environ.get("SESSION_STRING", "")
 
-# ─── Хранилище ────────────────────────────────────────────────────────────────
-DATA_FILE = "/data/payments.json"
+# ─── Хранилище (Railway Volume если подключён, иначе локально) ───────────────
+DATA_FILE = "/data/payments.json" if os.path.isdir("/data") else "payments.json"
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -42,6 +42,15 @@ def parse_payment(text):
         "otpravitel": o.group(1).strip() if o else "—",
         "kod":        k.group(1) if k else "—",
     }
+
+def add_payment(payment):
+    day = payment["date"]
+    if day not in db:
+        db[day] = []
+    if payment["kod"] in {r["kod"] for r in db[day]}:
+        return False
+    db[day].append(payment)
+    return True
 
 # ─── Форматирование ───────────────────────────────────────────────────────────
 def fmt_today():
@@ -80,6 +89,7 @@ def fmt_help():
         "/today — платежи за сегодня\n"
         "/all — история по всем дням\n"
         "/day DD.MM.YY — конкретный день\n"
+        "/import — загрузить всю историю из чата с банком\n"
         "/help — это сообщение"
     )
 
@@ -95,24 +105,14 @@ async def on_payment(event):
     text = event.raw_text
     if "zachislenie" not in text.lower():
         return
-
     payment = parse_payment(text)
     if not payment:
         return
-
+    if add_payment(payment):
+        save_data(db)
     day = payment["date"]
-    if day not in db:
-        db[day] = []
-
-    if payment["kod"] in {r["kod"] for r in db[day]}:
-        return
-
-    db[day].append(payment)
-    save_data(db)
-
     day_total = sum(r["summa"] for r in db[day])
     count = len(db[day])
-
     await client.send_message(
         "me",
         f"✅ +{payment['summa']:.2f} TJS  [{payment['time']}]\n"
@@ -154,6 +154,32 @@ async def cmd_day(event):
         lines.append(f"{i}. {r['time']}  +{r['summa']:.2f} TJS  👤 {r['otpravitel']}")
     await event.respond("\n".join(lines))
 
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/import$"))
+async def cmd_import(event):
+    if not await is_saved_messages(event):
+        return
+    await event.respond("⏳ Читаю историю сообщений от банка... подожди.")
+    count_new = 0
+    count_total = 0
+    async for message in client.iter_messages(SOURCE_BOT, limit=None):
+        text = message.raw_text or ""
+        if "zachislenie" not in text.lower():
+            continue
+        payment = parse_payment(text)
+        if not payment:
+            continue
+        count_total += 1
+        if add_payment(payment):
+            count_new += 1
+    save_data(db)
+    await event.respond(
+        f"✅ Импорт завершён!\n\n"
+        f"📨 Найдено сообщений: {count_total}\n"
+        f"🆕 Добавлено новых: {count_new}\n"
+        f"⏭ Пропущено дублей: {count_total - count_new}\n\n"
+        + fmt_history()
+    )
+
 @client.on(events.NewMessage(outgoing=True, pattern=r"^/help$"))
 async def cmd_help(event):
     if not await is_saved_messages(event):
@@ -161,8 +187,8 @@ async def cmd_help(event):
     await event.respond(fmt_help())
 
 # ─── Запуск ───────────────────────────────────────────────────────────────────
-print("✅ Бот запущен!")
-print("Команды в Избранном: /today  /all  /day DD.MM.YY  /help")
+print(f"✅ Бот запущен! База: {DATA_FILE}")
+print("Команды в Избранном: /today  /all  /day DD.MM.YY  /import  /help")
 
 with client.start(phone=lambda: PHONE):
     client.run_until_disconnected()
