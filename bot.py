@@ -13,7 +13,7 @@ SOURCE_BOT = os.environ["SOURCE_BOT"]
 SESSION    = os.environ.get("SESSION_STRING", "")
 
 # ─── Хранилище ────────────────────────────────────────────────────────────────
-DATA_FILE = "payments.json"
+DATA_FILE = "/data/payments.json"
 
 def load_data():
     if os.path.exists(DATA_FILE):
